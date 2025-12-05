@@ -2,13 +2,15 @@ import express from "express";
 import { Resend } from "resend";
 import cors from "cors";
 import Stripe from "stripe";
+import dotenv from "dotenv";
+dotenv.config();
 
 // App config
 const app = express();
 app.use(express.json());
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: process.env.FRONTEND_URL,
   })
 );
 
@@ -191,6 +193,7 @@ app.get("/coupons", async (req, res) => {
     const coupons = await stripe.coupons.list({ limit: 100 });
     return res.status(200).json(coupons.data);
   } catch (error) {
+    console.error("Error fetching coupons:", error);
     return res.status(500).json([]);
   }
 });
@@ -217,6 +220,7 @@ app.post("/coupons", async (req, res) => {
 
     return res.status(201).json(coupon);
   } catch (error) {
+    console.error("Error creating coupon:", error);
     return res.status(500).json({ error: error.message });
   }
 });
@@ -243,6 +247,7 @@ app.post("/manual-override-coupons", async (req, res) => {
 
     return res.status(201).json(coupon);
   } catch (error) {
+    console.error("Error creating manual override coupon:", error);
     return res.status(500).json({ error: error.message });
   }
 });
