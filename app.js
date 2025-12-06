@@ -74,6 +74,7 @@ app.post("/create-customer", async (req, res) => {
 app.get("/subscription-status/:customerId", async (req, res) => {
   try {
     const { customerId } = req.params;
+    console.log(customerId);
 
     // Get all subscriptions for the customer
     const subscriptions = await stripe.subscriptions.list({
@@ -81,6 +82,7 @@ app.get("/subscription-status/:customerId", async (req, res) => {
       status: "all",
       limit: 1,
     });
+    console.log(subscriptions.data);
 
     if (subscriptions.data.length === 0) {
       return res.status(200).json({
@@ -152,9 +154,10 @@ app.post("/discounts", async (req, res) => {
 });
 
 app.post("/create-checkout-session", async (req, res) => {
-  const { email } = req.body;
+  const { email, customerId } = req.body;
   const emailDomain = email.split("@")[1];
   const coupons = await stripe.coupons.list({ limit: 100 });
+  console.log(customerId);
 
   const discount = getDiscount(coupons.data, email, emailDomain);
 
@@ -167,6 +170,7 @@ app.post("/create-checkout-session", async (req, res) => {
         quantity: 1,
       },
     ],
+    customer: customerId,
     success_url: "http://localhost:5173/",
     cancel_url: "http://localhost:5173/pricing",
   };
