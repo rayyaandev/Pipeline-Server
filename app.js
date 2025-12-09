@@ -2,6 +2,8 @@ import express from "express";
 import { Resend } from "resend";
 import cors from "cors";
 import Stripe from "stripe";
+import { cert, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -17,6 +19,11 @@ app.use(
 const resendApiKey = process.env.RESEND_API_KEY;
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const senderEmail = process.env.SENDER_EMAIL;
+const firebaseServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
+
+if (!firebaseServiceAccount) {
+  throw new Error("Please define FIREBASE_SERVICE_ACCOUNT in .env");
+}
 if (!resendApiKey) {
   throw new Error("Please define RESEND_API_KEY in .env");
 }
@@ -29,7 +36,12 @@ if (!stripeSecretKey) {
 
 const resend = new Resend(resendApiKey);
 const stripe = new Stripe(stripeSecretKey);
+const firebaseApp = initializeApp({
+  credential: cert(JSON.parse(firebaseServiceAccount)),
+});
+const auth = getAuth(firebaseApp);
 
+// ----- USER ROUTES -----
 app.post("/send-email", async (req, res) => {
   const payload = req.body;
   console.log(payload);
@@ -39,8 +51,6 @@ app.post("/send-email", async (req, res) => {
       .status(400)
       .json({ error: "Please provide list of emails to send email to" });
   }
-
-  console.log(req.body);
 
   const emails = payload.emailObjects.map((obj) => {
     return {
@@ -56,7 +66,20 @@ app.post("/send-email", async (req, res) => {
 
   return res.status(200).json({ message: "Emails has been sent" });
 });
+app.post("/delete-user", async (req, res) => {
+  const { userUid } = req.body;
 
+  try {
+    await auth.deleteUser(userUid);
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    return res.status(500).json({ error: "Failed to delete user" });
+  }
+
+  return res.status(200).json({ message: "User deleted successfully" });
+});
+
+// ----- CUSTOMER ROUTES -----
 app.post("/create-customer", async (req, res) => {
   const payload = req.body;
   console.log(payload);
@@ -70,7 +93,20 @@ app.post("/create-customer", async (req, res) => {
 
   return res.status(200).json({ customerId: customer.id });
 });
+app.post("/delete-stripe-customer", async (req, res) => {
+  const { customerId } = req.body;
+  try {
+    await stripe.customers.del(customerId);
+    return res
+      .status(200)
+      .json({ message: "Stripe customer deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting stripe customer:", error);
+    return res.status(500).json({ error: "Failed to delete stripe customer" });
+  }
+});
 
+// ----- SUBSCRIPTION ROUTES -----
 app.get("/subscription-status/:customerId", async (req, res) => {
   try {
     const { customerId } = req.params;
@@ -113,51 +149,10 @@ app.get("/subscription-status/:customerId", async (req, res) => {
   }
 });
 
-app.post("/create-customer-session", async (req, res) => {
-  const { customerId } = req.body;
-  try {
-    const session = await stripe.customerSessions.create({
-      customer: customerId,
-      components: {
-        pricing_table: {
-          enabled: true,
-        },
-      },
-    });
-
-    return res
-      .status(200)
-      .json({ checkoutSessionSecret: session.client_secret });
-  } catch (error) {
-    console.error("Error creating checkout session:", error);
-    return res.status(500).json({ error: "Failed to create checkout session" });
-  }
-});
-
-app.post("/discounts", async (req, res) => {
-  const { email } = req.body;
-  const emailDomain = email.split("@")[1];
-  const coupons = await stripe.coupons.list({ limit: 100 });
-
-  const discount = getDiscount(coupons.data, email, emailDomain);
-
-  if (!discount || discount.max_redemptions === discount.times_redeemed) {
-    return res.status(200).json({ discount: null });
-  }
-
-  return res.status(200).json({
-    discount: {
-      discount: discount.percent_off / 100,
-      domain: discount.metadata.allowed_domain,
-    },
-  });
-});
-
 app.post("/create-checkout-session", async (req, res) => {
   const { email, customerId } = req.body;
   const emailDomain = email.split("@")[1];
   const coupons = await stripe.coupons.list({ limit: 100 });
-  console.log(customerId);
 
   const discount = getDiscount(coupons.data, email, emailDomain);
 
@@ -171,8 +166,8 @@ app.post("/create-checkout-session", async (req, res) => {
       },
     ],
     customer: customerId,
-    success_url: "http://localhost:5173/",
-    cancel_url: "http://localhost:5173/pricing",
+    success_url: process.env.FRONTEND_URL,
+    cancel_url: process.env.FRONTEND_URL + "/pricing?error=true",
   };
 
   if (discount) {
@@ -192,6 +187,7 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
+// ----- COUPONS ROUTES -----
 app.get("/coupons", async (req, res) => {
   try {
     const coupons = await stripe.coupons.list({ limit: 100 });
@@ -341,6 +337,25 @@ app.post("/coupons/bulk", async (req, res) => {
     console.error("Error creating bulk coupons:", error);
     return res.status(500).json({ error: error.message });
   }
+});
+
+app.post("/discounts", async (req, res) => {
+  const { email } = req.body;
+  const emailDomain = email.split("@")[1];
+  const coupons = await stripe.coupons.list({ limit: 100 });
+
+  const discount = getDiscount(coupons.data, email, emailDomain);
+
+  if (!discount || discount.max_redemptions === discount.times_redeemed) {
+    return res.status(200).json({ discount: null });
+  }
+
+  return res.status(200).json({
+    discount: {
+      discount: discount.percent_off / 100,
+      domain: discount.metadata.allowed_domain,
+    },
+  });
 });
 
 // -------- HELPER FUNCTION -----------
