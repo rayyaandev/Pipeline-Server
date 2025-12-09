@@ -20,6 +20,15 @@ const resendApiKey = process.env.RESEND_API_KEY;
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const senderEmail = process.env.SENDER_EMAIL;
 const firebaseServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
+const nodeEnv = process.env.NODE_ENV;
+const subscriptionPriceId =
+  nodeEnv === "production"
+    ? process.env.SUBSCRIPTION_PRICE_ID
+    : "price_1SVczaFG6H6jDaisbaA2rmbz";
+
+if (!subscriptionPriceId) {
+  throw new Error("Please define SUBSCRIPTION_PRICE_ID in .env");
+}
 
 if (!firebaseServiceAccount) {
   throw new Error("Please define FIREBASE_SERVICE_ACCOUNT in .env");
@@ -161,7 +170,7 @@ app.post("/create-checkout-session", async (req, res) => {
     mode: "subscription",
     line_items: [
       {
-        price: "price_1SVczaFG6H6jDaisbaA2rmbz",
+        price: subscriptionPriceId,
         quantity: 1,
       },
     ],
