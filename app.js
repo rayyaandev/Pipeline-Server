@@ -47,12 +47,12 @@ app.post("/send-email", async (req, res) => {
       from: senderEmail,
       to: obj.email,
       subject: "Research Paper Invitation",
-      text: `${obj.invitedBy} added you as a co-author of the work "${obj.paper}" with the following contribution: ${obj.contributions}. If you want to check the status of the publication, please follow this link ${req.baseUrl}`,
+      text: `${obj.invitedBy} added you as a co-author of the work "${obj.paper}" with the following contribution: ${obj.contributions}. If you want to check the status of the publication, please follow this link <NO LINK YET>`,
     };
   });
 
   const responses = await resend.batch.send(emails);
-  console.log(responses);
+  console.log(responses.data);
 
   return res.status(200).json({ message: "Emails has been sent" });
 });
@@ -265,6 +265,80 @@ app.delete("/coupons/:couponId", async (req, res) => {
     return res.status(200).json({ message: "Coupon deleted successfully" });
   } catch (error) {
     console.error("Error deleting coupon:", error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/coupons/bulk", async (req, res) => {
+  try {
+    const { coupons } = req.body;
+
+    if (!Array.isArray(coupons) || coupons.length === 0) {
+      return res.status(400).json({
+        error: "Please provide an array of coupons",
+      });
+    }
+
+    let created = 0;
+    let failed = 0;
+    const errors = [];
+
+    for (let i = 0; i < coupons.length; i++) {
+      const coupon = coupons[i];
+      try {
+        // Convert date string to Unix timestamp (seconds)
+        const redeemBy = coupon.expiresAt
+          ? Math.floor(new Date(coupon.expiresAt).getTime() / 1000)
+          : undefined;
+
+        if (coupon.type === "domain") {
+          // Create domain coupon
+          await stripe.coupons.create({
+            percent_off: Number(coupon.discountPercent),
+            duration: "forever",
+            max_redemptions: Number(coupon.maxSeats),
+            redeem_by: redeemBy,
+            name: coupon.name,
+            metadata: {
+              allowed_domain: coupon.domain,
+            },
+          });
+          created++;
+        } else if (coupon.type === "email") {
+          // Create email coupon
+          await stripe.coupons.create({
+            percent_off: Number(coupon.discountPercent),
+            duration: "forever",
+            max_redemptions: 1,
+            redeem_by: redeemBy,
+            name: coupon.name,
+            metadata: {
+              allowed_email: coupon.email,
+            },
+          });
+          created++;
+        } else {
+          throw new Error(`Invalid coupon type: ${coupon.type}`);
+        }
+      } catch (error) {
+        failed++;
+        errors.push({
+          row: i + 1,
+          coupon: coupon.name || `Row ${i + 1}`,
+          error: error.message,
+        });
+        console.error(`Error creating coupon at row ${i + 1}:`, error);
+      }
+    }
+
+    return res.status(200).json({
+      created,
+      failed,
+      total: coupons.length,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (error) {
+    console.error("Error creating bulk coupons:", error);
     return res.status(500).json({ error: error.message });
   }
 });
