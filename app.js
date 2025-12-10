@@ -4,6 +4,7 @@ import cors from "cors";
 import Stripe from "stripe";
 import { cert, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -20,6 +21,7 @@ const resendApiKey = process.env.RESEND_API_KEY;
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 const senderEmail = process.env.SENDER_EMAIL;
 const firebaseServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
+const jwtSecret = process.env.JWT_SECRET;
 const nodeEnv = process.env.NODE_ENV;
 const subscriptionPriceId =
   nodeEnv === "production"
@@ -42,6 +44,9 @@ if (!senderEmail) {
 if (!stripeSecretKey) {
   throw new Error("Please define STRIPE_SECRET_KEY in .env");
 }
+if (!jwtSecret) {
+  throw new Error("Please define JWT_SECRET in .env");
+}
 
 const resend = new Resend(resendApiKey);
 const stripe = new Stripe(stripeSecretKey);
@@ -51,6 +56,34 @@ const firebaseApp = initializeApp({
 const auth = getAuth(firebaseApp);
 
 // ----- USER ROUTES -----
+app.post("/verify-token", async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: "Token is required" });
+    }
+
+    // Verify and decode the JWT token
+    const decoded = jwt.verify(token, jwtSecret);
+
+    if (!decoded || !decoded.email) {
+      return res.status(400).json({ error: "Invalid token" });
+    }
+
+    return res.status(200).json({ email: decoded.email });
+  } catch (error) {
+    console.error("Error verifying token:", error);
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({ error: "Token has expired" });
+    }
+    if (error.name === "JsonWebTokenError") {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+    return res.status(500).json({ error: "Failed to verify token" });
+  }
+});
+
 app.post("/send-email", async (req, res) => {
   const payload = req.body;
   console.log(payload);
@@ -62,11 +95,21 @@ app.post("/send-email", async (req, res) => {
   }
 
   const emails = payload.emailObjects.map((obj) => {
+    // Generate JWT token containing the collaborator's email
+    const token = jwt.sign(
+      { email: obj.email },
+      jwtSecret,
+      { expiresIn: "30d" } // Token expires in 30 days
+    );
+
+    // Create the link with the JWT token
+    const viewLink = `${process.env.FRONTEND_URL}/view/collaborator-papers?token=${token}`;
+
     return {
       from: senderEmail,
       to: obj.email,
       subject: "Research Paper Invitation",
-      text: `${obj.invitedBy} added you as a co-author of the work "${obj.paper}" with the following contribution: ${obj.contributions}. If you want to check the status of the publication, please follow this link <NO LINK YET>`,
+      text: `${obj.invitedBy} added you as a co-author of the work "${obj.paper}" with the following contribution: ${obj.contributions}. If you want to check the status of the publication, please follow this link ${viewLink}`,
     };
   });
 
