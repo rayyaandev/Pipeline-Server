@@ -96,20 +96,31 @@ app.post("/send-email", async (req, res) => {
 
   const emails = payload.emailObjects.map((obj) => {
     // Generate JWT token containing the collaborator's email
-    const token = jwt.sign(
-      { email: obj.email },
-      jwtSecret,
-      { expiresIn: "30d" } // Token expires in 30 days
-    );
+    // No expiration - token never expires
+    const token = jwt.sign({ email: obj.email }, jwtSecret);
 
     // Create the link with the JWT token
     const viewLink = `${process.env.FRONTEND_URL}/view/collaborator-papers?token=${token}`;
+
+    // HTML email content with clickable link
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+        <p>Hello,</p>
+        <p><strong>${obj.invitedBy}</strong> added you as a co-author of the work <strong>"${obj.paper}"</strong> with the following contribution: <strong>${obj.contributions}</strong>.</p>
+        <p>If you want to check the status of the publication, please click the link below:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${viewLink}" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold;">View Paper Status</a>
+        </div>
+        <p style="font-size: 12px; color: #666; margin-top: 30px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
+        <p style="font-size: 12px; color: #2563eb; word-break: break-all;">${viewLink}</p>
+      </div>
+    `;
 
     return {
       from: senderEmail,
       to: obj.email,
       subject: "Research Paper Invitation",
-      text: `${obj.invitedBy} added you as a co-author of the work "${obj.paper}" with the following contribution: ${obj.contributions}. If you want to check the status of the publication, please follow this link ${viewLink}`,
+      html: htmlContent,
     };
   });
 
