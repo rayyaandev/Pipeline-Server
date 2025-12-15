@@ -106,9 +106,9 @@ app.post("/send-email", async (req, res) => {
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
         <!-- Header with Logo -->
-        <div style="background-color: #ffffff; padding: 20px; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+        <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
           <div style="display: flex; align-items: center;">
-            <img src="${process.env.FRONTEND_URL}/logo.png" alt="Pipeline Logo" style="height: 50px; width: auto;" />
+            <img src="https://pipeline-three-tau.vercel.app/logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
           </div>
         </div>
         
