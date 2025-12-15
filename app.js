@@ -105,21 +105,31 @@ app.post("/send-email", async (req, res) => {
     // HTML email content with clickable link
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
-        <p>Hello,</p>
-        <p><strong>${obj.invitedBy}</strong> added you as a co-author of the work <strong>"${obj.paper}"</strong> with the following contribution: <strong>${obj.contributions}</strong>.</p>
-        <p>If you want to check the status of the publication, please click the link below:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${viewLink}" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold;">View Paper Status</a>
+        <!-- Header with Logo -->
+        <div style="background-color: #ffffff; padding: 20px; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+          <div style="display: flex; align-items: center;">
+            <img src="${process.env.FRONTEND_URL}/logo.png" alt="Pipeline Logo" style="height: 50px; width: auto;" />
+          </div>
         </div>
-        <p style="font-size: 12px; color: #666; margin-top: 30px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
-        <p style="font-size: 12px; color: #2563eb; word-break: break-all;">${viewLink}</p>
+        
+        <!-- Email Content -->
+        <div style="padding: 0 20px;">
+          <p>Hello,</p>
+          <p><strong>${obj.invitedBy}</strong> added you as a co-author of the work <strong>"${obj.paper}"</strong> with the following contribution: <strong>${obj.contributions}</strong>.</p>
+          <p>If you want to check the status of the publication, please click the link below:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${viewLink}" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold;">View Paper Status</a>
+          </div>
+          <p style="font-size: 12px; color: #666; margin-top: 30px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
+          <p style="font-size: 12px; color: #2563eb; word-break: break-all;">${viewLink}</p>
+        </div>
       </div>
     `;
 
     return {
       from: senderEmail,
       to: obj.email,
-      subject: "Research Paper Invitation",
+      subject: "You've been added as co-author in Pipeline",
       html: htmlContent,
     };
   });
