@@ -318,6 +318,67 @@ app.post("/manual-override-coupons", async (req, res) => {
       },
     });
 
+    // Send email to the target email
+    try {
+      const loginUrl = `${process.env.FRONTEND_URL}/login`;
+      const signupUrl = `${process.env.FRONTEND_URL}/signup`;
+      const expirationText = redeemBy
+        ? `This coupon expires on ${new Date(
+            redeemBy * 1000
+          ).toLocaleDateString()}.`
+        : "This coupon never expires.";
+
+      const htmlContent = `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+          <!-- Header with Logo -->
+          <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+            <div style="display: flex; align-items: center;">
+              <img src="https://pipeline-three-tau.vercel.app/logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+            </div>
+          </div>
+          
+          <!-- Email Content -->
+          <div style="padding: 0 20px;">
+            <p>Hello,</p>
+            <p>Great news! You've been granted a special discount coupon for Pipeline.</p>
+            
+            <div style="background-color: #f3f4f6; border-left: 4px solid #2563eb; padding: 15px; margin: 20px 0;">
+              <p style="margin: 0; font-size: 16px;"><strong>Coupon Details:</strong></p>
+              <p style="margin: 5px 0;"><strong>Coupon Name:</strong> ${name}</p>
+              <p style="margin: 5px 0;"><strong>Discount:</strong> ${discountPercent}% off</p>
+              <p style="margin: 5px 0;"><strong>Expiration:</strong> ${expirationText}</p>
+            </div>
+
+            <p>This coupon will be automatically applied when you sign up or subscribe using your email address: <strong>${email}</strong>.</p>
+            
+            <p>To get started:</p>
+            <ol style="padding-left: 20px;">
+              <li>If you already have an account, <a href="${loginUrl}" style="color: #2563eb;">log in here</a></li>
+              <li>If you're new to Pipeline, <a href="${signupUrl}" style="color: #2563eb;">sign up here</a></li>
+            </ol>
+
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${signupUrl}" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold;">Get Started</a>
+            </div>
+
+            <p style="font-size: 12px; color: #666; margin-top: 30px;">If you have any questions, please don't hesitate to contact us.</p>
+          </div>
+        </div>
+      `;
+
+      await resend.emails.send({
+        from: senderEmail,
+        to: email,
+        subject: `Your ${discountPercent}% Discount Coupon for Pipeline`,
+        html: htmlContent,
+      });
+
+      console.log(`Coupon email sent successfully to ${email}`);
+    } catch (emailError) {
+      console.error("Error sending coupon email:", emailError);
+      // Don't fail the request if email fails, just log it
+    }
+
     return res.status(201).json(coupon);
   } catch (error) {
     console.error("Error creating manual override coupon:", error);
