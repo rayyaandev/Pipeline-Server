@@ -211,6 +211,7 @@ app.get("/subscription-status/:customerId", async (req, res) => {
       hasSubscription: true,
       status: subscription.status,
       currentPeriodEnd: subscription.items.data[0].current_period_end,
+      trialEnd: subscription.trial_end || null, // Trial end timestamp
       planName: product.name || "Unknown Plan",
       subscriptionId: subscription.id,
     });
@@ -223,40 +224,95 @@ app.get("/subscription-status/:customerId", async (req, res) => {
 });
 
 app.post("/create-checkout-session", async (req, res) => {
-  const { email, customerId } = req.body;
-  const emailDomain = email.split("@")[1];
-  const coupons = await stripe.coupons.list({ limit: 100 });
-
-  const discount = getDiscount(coupons.data, email, emailDomain);
-
-  const checkoutParams = {
-    payment_method_types: ["card"],
-    mode: "subscription",
-    line_items: [
-      {
-        price: subscriptionPriceId,
-        quantity: 1,
-      },
-    ],
-    customer: customerId,
-    success_url: process.env.FRONTEND_URL,
-    cancel_url: process.env.FRONTEND_URL + "/pricing?error=true",
-  };
-
-  if (discount) {
-    checkoutParams.discounts = [
-      {
-        coupon: discount.id,
-      },
-    ];
-  }
-
   try {
+    const { email, customerId } = req.body;
+    const emailDomain = email.split("@")[1];
+    const coupons = await stripe.coupons.list({ limit: 100 });
+
+    const discount = getDiscount(coupons.data, email, emailDomain);
+
+    // Check for existing subscriptions (including canceled ones)
+    const existingSubscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      limit: 10,
+    });
+
+    // Check if user has an active or trialing subscription
+    const hasActiveSubscription = existingSubscriptions.data.some(
+      (sub) => sub.status === "active" || sub.status === "trialing"
+    );
+
+    if (hasActiveSubscription) {
+      return res.status(400).json({
+        error:
+          "You already have an active subscription. Please cancel it first or manage it in your account settings.",
+        sessionUrl: null,
+      });
+    }
+
+    // Check if customer has ever had a subscription (including canceled ones)
+    // If they have, they've already used their trial, so don't give them another one
+    const hasHadSubscription = existingSubscriptions.data.length > 0;
+
+    const checkoutParams = {
+      payment_method_types: ["card"],
+      mode: "subscription",
+      line_items: [
+        {
+          price: subscriptionPriceId,
+          quantity: 1,
+        },
+      ],
+      customer: customerId,
+      success_url: process.env.FRONTEND_URL + "/dashboard",
+      cancel_url: process.env.FRONTEND_URL + "/pricing?error=true",
+    };
+
+    // Only add trial period if customer has never had a subscription before
+    if (!hasHadSubscription) {
+      checkoutParams.subscription_data = {
+        trial_period_days: 30, // 30-day free trial only for first-time customers
+      };
+    }
+
+    if (discount) {
+      checkoutParams.discounts = [
+        {
+          coupon: discount.id,
+        },
+      ];
+    }
+
     const session = await stripe.checkout.sessions.create(checkoutParams);
     return res.status(200).json({ sessionUrl: session.url });
   } catch (error) {
     console.error("Error creating checkout session:", error);
-    return res.status(500).json({ sessionUrl: null });
+    return res.status(500).json({ sessionUrl: null, error: error.message });
+  }
+});
+
+app.post("/cancel-subscription", async (req, res) => {
+  try {
+    const { subscriptionId } = req.body;
+
+    if (!subscriptionId) {
+      return res.status(400).json({ error: "subscriptionId is required" });
+    }
+
+    // Cancel immediately - stripe.subscriptions.cancel() cancels immediately by default
+    // To cancel at period end, use: stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true })
+    const subscription = await stripe.subscriptions.cancel(subscriptionId);
+
+    return res.status(200).json({
+      message: "Subscription cancelled successfully",
+      status: subscription.status,
+    });
+  } catch (error) {
+    console.error("Error cancelling subscription:", error.message);
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to cancel subscription" });
   }
 });
 
@@ -494,12 +550,30 @@ app.post("/discounts", async (req, res) => {
 
 // -------- HELPER FUNCTION -----------
 function getDiscount(coupons, email, domain) {
-  // 1. Filter email and domain coupons
+  const currentTime = Math.floor(Date.now() / 1000); // Current Unix timestamp in seconds
+
+  // Helper function to check if coupon is valid (not expired and not fully redeemed)
+  const isValidCoupon = (coupon) => {
+    // Check if coupon is expired
+    if (coupon.redeem_by && coupon.redeem_by < currentTime) {
+      return false;
+    }
+    // Check if coupon has reached max redemptions
+    if (
+      coupon.max_redemptions &&
+      coupon.times_redeemed >= coupon.max_redemptions
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  // 1. Filter email and domain coupons, excluding expired and fully redeemed ones
   const emailCoupons = coupons.filter(
-    (c) => c.metadata.allowed_email === email
+    (c) => c.metadata.allowed_email === email && isValidCoupon(c)
   );
   const domainCoupons = coupons.filter(
-    (c) => c.metadata.allowed_domain === domain
+    (c) => c.metadata.allowed_domain === domain && isValidCoupon(c)
   );
 
   // 2. If user have an email coupon return it
@@ -521,25 +595,5 @@ function getDiscount(coupons, email, domain) {
   // 3. If no discounts are available, return null (fallback to normal price)
   return null;
 }
-
-// app.post("/cancel-subscription", async (req, res) => {
-//   try {
-//     const { subscriptionId } = req.body;
-
-//     if (!subscriptionId) {
-//       return res.status(400).json({ error: "subscriptionId is required" });
-//     }
-
-//     const subscription = await stripe.subscriptions.cancel(subscriptionId);
-
-//     return res.status(200).json({
-//       message: "Subscription cancelled successfully",
-//       status: subscription.status,
-//     });
-//   } catch (error) {
-//     console.error("Error cancelling subscription:", error);
-//     return res.status(500).json({ error: "Failed to cancel subscription" });
-//   }
-// });
 
 app.listen(3000, () => console.log("Listening on 3000"));
