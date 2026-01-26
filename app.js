@@ -139,6 +139,111 @@ app.post("/send-email", async (req, res) => {
 
   return res.status(200).json({ message: "Emails has been sent" });
 });
+// ----- FORGOT PASSWORD ROUTES -----
+app.post("/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    // Check if user exists in Firebase
+    let userRecord;
+    try {
+      userRecord = await auth.getUserByEmail(email);
+    } catch (error) {
+      // Don't reveal whether the email exists or not
+      return res
+        .status(200)
+        .json({ message: "If an account exists with this email, a password reset link has been sent." });
+    }
+
+    // Generate JWT with 1 hour expiry
+    const token = jwt.sign({ email: userRecord.email }, jwtSecret, {
+      expiresIn: "1h",
+    });
+
+    const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+        <!-- Header with Logo -->
+        <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+          <div style="display: flex; align-items: center;">
+            <img src="https://pipeline-three-tau.vercel.app/logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+          </div>
+        </div>
+
+        <!-- Email Content -->
+        <div style="padding: 0 20px;">
+          <p>Hello,</p>
+          <p>We received a request to reset your password for your Pipeline account.</p>
+          <p>Click the button below to set a new password. This link will expire in 1 hour.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetLink}" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold;">Reset Password</a>
+          </div>
+          <p style="font-size: 14px; color: #666;">If you didn't request a password reset, you can safely ignore this email. Your password will not be changed.</p>
+          <p style="font-size: 12px; color: #666; margin-top: 30px;">If the button doesn't work, you can copy and paste this link into your browser:</p>
+          <p style="font-size: 12px; color: #2563eb; word-break: break-all;">${resetLink}</p>
+        </div>
+      </div>
+    `;
+
+    await resend.emails.send({
+      from: senderEmail,
+      to: email,
+      subject: "Reset your Pipeline password",
+      html: htmlContent,
+    });
+
+    return res
+      .status(200)
+      .json({ message: "If an account exists with this email, a password reset link has been sent." });
+  } catch (error) {
+    console.error("Error in forgot-password:", error);
+    return res.status(500).json({ error: "Failed to process password reset request" });
+  }
+});
+
+app.post("/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ error: "Token and new password are required" });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    // Verify JWT token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (error) {
+      if (error.name === "TokenExpiredError") {
+        return res.status(401).json({ error: "Reset link has expired. Please request a new one." });
+      }
+      return res.status(401).json({ error: "Invalid reset link." });
+    }
+
+    if (!decoded || !decoded.email) {
+      return res.status(401).json({ error: "Invalid reset link." });
+    }
+
+    // Find user by email and update password
+    const userRecord = await auth.getUserByEmail(decoded.email);
+    await auth.updateUser(userRecord.uid, { password: newPassword });
+
+    return res.status(200).json({ message: "Password updated successfully" });
+  } catch (error) {
+    console.error("Error in reset-password:", error);
+    return res.status(500).json({ error: "Failed to reset password" });
+  }
+});
+
 app.post("/delete-user", async (req, res) => {
   const { userUid } = req.body;
 
