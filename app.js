@@ -4,6 +4,7 @@ import cors from "cors";
 import Stripe from "stripe";
 import { cert, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 dotenv.config();
@@ -54,6 +55,7 @@ const firebaseApp = initializeApp({
   credential: cert(JSON.parse(firebaseServiceAccount)),
 });
 const auth = getAuth(firebaseApp);
+const firestore = getFirestore(firebaseApp);
 
 // ----- USER ROUTES -----
 app.post("/verify-token", async (req, res) => {
@@ -142,7 +144,7 @@ app.post("/send-email", async (req, res) => {
 // ----- FORGOT PASSWORD ROUTES -----
 app.post("/forgot-password", async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, useRecoveryEmail } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: "Email is required" });
@@ -159,7 +161,21 @@ app.post("/forgot-password", async (req, res) => {
         .json({ message: "If an account exists with this email, a password reset link has been sent." });
     }
 
-    // Generate JWT with 1 hour expiry
+    // Determine the target email address
+    let targetEmail = email;
+
+    if (useRecoveryEmail) {
+      const usersRef = firestore.collection("users_profiles");
+      const snapshot = await usersRef.where("email", "==", email).limit(1).get();
+
+      if (snapshot.empty || !snapshot.docs[0].data().recoveryEmail) {
+        return res.status(400).json({ error: "No recovery email found for this account." });
+      }
+
+      targetEmail = snapshot.docs[0].data().recoveryEmail;
+    }
+
+    // Generate JWT with 1 hour expiry (always contains primary email)
     const token = jwt.sign({ email: userRecord.email }, jwtSecret, {
       expiresIn: "1h",
     });
@@ -192,7 +208,7 @@ app.post("/forgot-password", async (req, res) => {
 
     await resend.emails.send({
       from: senderEmail,
-      to: email,
+      to: targetEmail,
       subject: "Reset your Pipeline password",
       html: htmlContent,
     });
@@ -241,6 +257,152 @@ app.post("/reset-password", async (req, res) => {
   } catch (error) {
     console.error("Error in reset-password:", error);
     return res.status(500).json({ error: "Failed to reset password" });
+  }
+});
+
+// ----- RECOVERY EMAIL ROUTES -----
+app.post("/send-recovery-email-verification", async (req, res) => {
+  try {
+    const { email, recoveryEmail } = req.body;
+
+    if (!email || !recoveryEmail) {
+      return res.status(400).json({ error: "Email and recovery email are required" });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(recoveryEmail)) {
+      return res.status(400).json({ error: "Invalid recovery email format" });
+    }
+
+    if (email.toLowerCase() === recoveryEmail.toLowerCase()) {
+      return res.status(400).json({ error: "Recovery email must be different from your primary email" });
+    }
+
+    // Verify the user exists in Firebase Auth
+    try {
+      await auth.getUserByEmail(email);
+    } catch (error) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Generate JWT with 1 hour expiry
+    const token = jwt.sign({ email, recoveryEmail }, jwtSecret, {
+      expiresIn: "1h",
+    });
+
+    const verifyLink = `${process.env.FRONTEND_URL}/verify-recovery-email?token=${token}`;
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+          <div style="display: flex; align-items: center;">
+            <img src="https://pipeline-three-tau.vercel.app/logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+          </div>
+        </div>
+        <div style="padding: 0 20px;">
+          <p>Hello,</p>
+          <p>You requested to add this email as a recovery email for your Pipeline account (<strong>${email}</strong>).</p>
+          <p>Please click the button below to verify this recovery email. This link will expire in 1 hour.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${verifyLink}" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold;">Verify Recovery Email</a>
+          </div>
+          <p style="font-size: 14px; color: #666;">If you didn't request this, you can safely ignore this email.</p>
+          <p style="font-size: 12px; color: #666; margin-top: 30px;">If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="font-size: 12px; color: #2563eb; word-break: break-all;">${verifyLink}</p>
+        </div>
+      </div>
+    `;
+
+    await resend.emails.send({
+      from: senderEmail,
+      to: recoveryEmail,
+      subject: "Verify your recovery email for Pipeline",
+      html: htmlContent,
+    });
+
+    return res.status(200).json({ message: "Verification email sent to your recovery email address." });
+  } catch (error) {
+    console.error("Error in send-recovery-email-verification:", error);
+    return res.status(500).json({ error: "Failed to send verification email" });
+  }
+});
+
+app.post("/verify-recovery-email", async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: "Token is required" });
+    }
+
+    // Verify JWT token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (error) {
+      if (error.name === "TokenExpiredError") {
+        return res.status(401).json({ error: "Verification link has expired. Please request a new one." });
+      }
+      return res.status(401).json({ error: "Invalid verification link." });
+    }
+
+    if (!decoded || !decoded.email || !decoded.recoveryEmail) {
+      return res.status(401).json({ error: "Invalid verification link." });
+    }
+
+    // Find user document in Firestore by email
+    const usersRef = firestore.collection("users_profiles");
+    const snapshot = await usersRef.where("email", "==", decoded.email).limit(1).get();
+
+    if (snapshot.empty) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Update the user document with the recovery email
+    const userDoc = snapshot.docs[0];
+    await userDoc.ref.update({ recoveryEmail: decoded.recoveryEmail });
+
+    return res.status(200).json({
+      message: "Recovery email verified successfully",
+      recoveryEmail: decoded.recoveryEmail,
+    });
+  } catch (error) {
+    console.error("Error in verify-recovery-email:", error);
+    return res.status(500).json({ error: "Failed to verify recovery email" });
+  }
+});
+
+app.post("/check-recovery-email", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    // Check if user exists in Firebase Auth
+    try {
+      await auth.getUserByEmail(email);
+    } catch (error) {
+      // Don't reveal whether the email exists
+      return res.status(200).json({ hasRecoveryEmail: false });
+    }
+
+    // Check Firestore for recovery email
+    const usersRef = firestore.collection("users_profiles");
+    const snapshot = await usersRef.where("email", "==", email).limit(1).get();
+
+    if (snapshot.empty) {
+      return res.status(200).json({ hasRecoveryEmail: false });
+    }
+
+    const userData = snapshot.docs[0].data();
+    return res.status(200).json({
+      hasRecoveryEmail: !!userData.recoveryEmail,
+    });
+  } catch (error) {
+    console.error("Error checking recovery email:", error);
+    return res.status(200).json({ hasRecoveryEmail: false });
   }
 });
 
