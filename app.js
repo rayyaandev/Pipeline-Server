@@ -278,6 +278,22 @@ app.post("/send-recovery-email-verification", async (req, res) => {
       return res.status(400).json({ error: "Recovery email must be different from your primary email" });
     }
 
+    // Check if this recovery email is already verified by another user
+    const usersRef = firestore.collection("users_profiles");
+    const existingSnapshot = await usersRef
+      .where("recoveryEmail", "==", recoveryEmail.toLowerCase())
+      .where("recoveryEmailVerified", "==", true)
+      .limit(1)
+      .get();
+
+    if (!existingSnapshot.empty) {
+      const existingUser = existingSnapshot.docs[0].data();
+      // Only block if it's a different user
+      if (existingUser.email.toLowerCase() !== email.toLowerCase()) {
+        return res.status(400).json({ error: "This email is already registered as a recovery email for another account" });
+      }
+    }
+
     // Verify the user exists in Firebase Auth
     try {
       await auth.getUserByEmail(email);
@@ -358,9 +374,13 @@ app.post("/verify-recovery-email", async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Update the user document with the recovery email
+    // Update the user document with the recovery email and verification status
     const userDoc = snapshot.docs[0];
-    await userDoc.ref.update({ recoveryEmail: decoded.recoveryEmail });
+    await userDoc.ref.update({
+      recoveryEmail: decoded.recoveryEmail.toLowerCase(),
+      recoveryEmailVerified: true,
+      recoveryEmailVerifiedAt: new Date()
+    });
 
     return res.status(200).json({
       message: "Recovery email verified successfully",
