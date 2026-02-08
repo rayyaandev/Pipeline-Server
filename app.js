@@ -109,8 +109,8 @@ app.post("/send-email", async (req, res) => {
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
         <!-- Header with Logo -->
         <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
-          <div style="display: flex; align-items: center;">
-            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+          <div style="text-align: center;">
+            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 90px; width: auto;" />
           </div>
         </div>
         
@@ -186,8 +186,8 @@ app.post("/forgot-password", async (req, res) => {
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
         <!-- Header with Logo -->
         <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
-          <div style="display: flex; align-items: center;">
-            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+          <div style="text-align: center;">
+            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 90px; width: auto;" />
           </div>
         </div>
 
@@ -311,8 +311,8 @@ app.post("/send-recovery-email-verification", async (req, res) => {
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
-          <div style="display: flex; align-items: center;">
-            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+          <div style="text-align: center;">
+            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 90px; width: auto;" />
           </div>
         </div>
         <div style="padding: 0 20px;">
@@ -473,8 +473,8 @@ app.post("/initiate-account-recovery", async (req, res) => {
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
         <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
-          <div style="display: flex; align-items: center;">
-            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+          <div style="text-align: center;">
+            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 90px; width: auto;" />
           </div>
         </div>
         <div style="padding: 0 20px;">
@@ -882,8 +882,8 @@ app.post("/manual-override-coupons", async (req, res) => {
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
           <!-- Header with Logo -->
           <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
-            <div style="display: flex; align-items: center;">
-              <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+            <div style="text-align: center;">
+              <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 90px; width: auto;" />
             </div>
           </div>
           
