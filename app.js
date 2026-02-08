@@ -426,6 +426,213 @@ app.post("/check-recovery-email", async (req, res) => {
   }
 });
 
+// ----- ACCOUNT RECOVERY ROUTES -----
+app.post("/initiate-account-recovery", async (req, res) => {
+  try {
+    const { recoveryEmail } = req.body;
+
+    if (!recoveryEmail) {
+      return res.status(400).json({ error: "Recovery email is required" });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(recoveryEmail)) {
+      return res.status(400).json({ error: "Invalid email format" });
+    }
+
+    // Find the account with this verified recovery email
+    const usersRef = firestore.collection("users_profiles");
+    const snapshot = await usersRef
+      .where("recoveryEmail", "==", recoveryEmail.toLowerCase())
+      .where("recoveryEmailVerified", "==", true)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      // Don't reveal if the recovery email exists or not for security
+      return res.status(200).json({ message: "If an account exists with this recovery email, you will receive a verification link." });
+    }
+
+    const userData = snapshot.docs[0].data();
+    const userDocId = snapshot.docs[0].id;
+
+    // Generate JWT with 1 hour expiry - includes user doc ID for recovery
+    const token = jwt.sign(
+      {
+        recoveryEmail: recoveryEmail.toLowerCase(),
+        userDocId,
+        primaryEmail: userData.email,
+        type: "account-recovery"
+      },
+      jwtSecret,
+      { expiresIn: "1h" }
+    );
+
+    const recoveryLink = `${process.env.FRONTEND_URL}/account-recovery?token=${token}`;
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+          <div style="display: flex; align-items: center;">
+            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 70px; width: 100%;" />
+          </div>
+        </div>
+        <div style="padding: 0 20px;">
+          <p>Hello,</p>
+          <p>You requested to recover your Pipeline account associated with <strong>${userData.email}</strong>.</p>
+          <p>Click the button below to verify your identity and update your account email. This link will expire in 1 hour.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${recoveryLink}" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold;">Recover My Account</a>
+          </div>
+          <p style="font-size: 14px; color: #666;">If you didn't request this, you can safely ignore this email. Your account is secure.</p>
+          <p style="font-size: 12px; color: #666; margin-top: 30px;">If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="font-size: 12px; color: #2563eb; word-break: break-all;">${recoveryLink}</p>
+        </div>
+      </div>
+    `;
+
+    await resend.emails.send({
+      from: senderEmail,
+      to: recoveryEmail,
+      subject: "Recover your Pipeline account",
+      html: htmlContent,
+    });
+
+    return res.status(200).json({ message: "If an account exists with this recovery email, you will receive a verification link." });
+  } catch (error) {
+    console.error("Error in initiate-account-recovery:", error);
+    return res.status(500).json({ error: "Failed to initiate account recovery" });
+  }
+});
+
+app.post("/verify-account-recovery-token", async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: "Token is required" });
+    }
+
+    // Verify JWT token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (error) {
+      if (error.name === "TokenExpiredError") {
+        return res.status(401).json({ error: "Recovery link has expired. Please request a new one." });
+      }
+      return res.status(401).json({ error: "Invalid recovery link." });
+    }
+
+    if (!decoded || decoded.type !== "account-recovery" || !decoded.userDocId) {
+      return res.status(401).json({ error: "Invalid recovery link." });
+    }
+
+    // Return the primary email so the user knows which account they're recovering
+    return res.status(200).json({
+      valid: true,
+      primaryEmail: decoded.primaryEmail,
+      recoveryEmail: decoded.recoveryEmail
+    });
+  } catch (error) {
+    console.error("Error in verify-account-recovery-token:", error);
+    return res.status(500).json({ error: "Failed to verify recovery token" });
+  }
+});
+
+app.post("/complete-account-recovery", async (req, res) => {
+  try {
+    const { token, newEmail } = req.body;
+
+    if (!token || !newEmail) {
+      return res.status(400).json({ error: "Token and new email are required" });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmail)) {
+      return res.status(400).json({ error: "Invalid email format" });
+    }
+
+    // Verify JWT token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (error) {
+      if (error.name === "TokenExpiredError") {
+        return res.status(401).json({ error: "Recovery link has expired. Please request a new one." });
+      }
+      return res.status(401).json({ error: "Invalid recovery link." });
+    }
+
+    if (!decoded || decoded.type !== "account-recovery" || !decoded.userDocId) {
+      return res.status(401).json({ error: "Invalid recovery link." });
+    }
+
+    // Check if new email is already in use by another account
+    try {
+      const existingUser = await auth.getUserByEmail(newEmail);
+      // If the email belongs to the same user (recovering to their recovery email), that's OK
+      const userDoc = await firestore.collection("users_profiles").doc(decoded.userDocId).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        // Get Firebase Auth UID for this user
+        const oldFirebaseUser = await auth.getUserByEmail(userData.email);
+        if (existingUser.uid !== oldFirebaseUser.uid) {
+          return res.status(400).json({ error: "This email is already in use by another account" });
+        }
+      }
+    } catch (error) {
+      // Email not in use, which is good
+    }
+
+    // Get the user document
+    const userDoc = await firestore.collection("users_profiles").doc(decoded.userDocId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userData = userDoc.data();
+
+    // Get Firebase Auth user by old email
+    let firebaseUser;
+    try {
+      firebaseUser = await auth.getUserByEmail(userData.email);
+    } catch (error) {
+      return res.status(404).json({ error: "User authentication record not found" });
+    }
+
+    // Update Firebase Auth email
+    await auth.updateUser(firebaseUser.uid, { email: newEmail.toLowerCase() });
+
+    // Update Firestore user profile
+    await userDoc.ref.update({
+      email: newEmail.toLowerCase(),
+      // If the new email is the recovery email, we need to clear it or set a new one later
+      // For now, we'll keep the recovery email as is
+    });
+
+    // Update Stripe customer email if they have one
+    if (userData.stripe_customer_id) {
+      try {
+        await stripe.customers.update(userData.stripe_customer_id, {
+          email: newEmail.toLowerCase()
+        });
+      } catch (stripeError) {
+        console.error("Failed to update Stripe customer email:", stripeError);
+        // Don't fail the whole operation for Stripe error
+      }
+    }
+
+    return res.status(200).json({
+      message: "Account recovered successfully. You can now log in with your new email.",
+      newEmail: newEmail.toLowerCase()
+    });
+  } catch (error) {
+    console.error("Error in complete-account-recovery:", error);
+    return res.status(500).json({ error: "Failed to complete account recovery" });
+  }
+});
+
 app.post("/delete-user", async (req, res) => {
   const { userUid } = req.body;
 
