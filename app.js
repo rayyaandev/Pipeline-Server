@@ -745,10 +745,6 @@ app.post("/create-checkout-session", async (req, res) => {
       });
     }
 
-    // Check if customer has ever had a subscription (including canceled ones)
-    // If they have, they've already used their trial, so don't give them another one
-    const hasHadSubscription = existingSubscriptions.data.length > 0;
-
     const checkoutParams = {
       payment_method_types: ["card"],
       mode: "subscription",
@@ -762,13 +758,6 @@ app.post("/create-checkout-session", async (req, res) => {
       success_url: process.env.FRONTEND_URL + "/dashboard",
       cancel_url: process.env.FRONTEND_URL + "/pricing?error=true",
     };
-
-    // Only add trial period if customer has never had a subscription before
-    if (!hasHadSubscription) {
-      checkoutParams.subscription_data = {
-        trial_period_days: 30, // 30-day free trial only for first-time customers
-      };
-    }
 
     if (discount) {
       checkoutParams.discounts = [
