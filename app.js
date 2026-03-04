@@ -141,6 +141,94 @@ app.post("/send-email", async (req, res) => {
 
   return res.status(200).json({ message: "Emails has been sent" });
 });
+app.post("/send-otp", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    // Validate user exists in Firebase Auth
+    try {
+      await auth.getUserByEmail(email);
+    } catch (error) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Generate 6 digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    const otpDocRef = firestore.collection("otps").doc(email.toLowerCase());
+    await otpDocRef.set({
+      otp,
+      expiresAt,
+      createdAt: new Date(),
+    });
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+          <div style="text-align: center;">
+            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 90px; width: auto;" />
+          </div>
+        </div>
+        <div style="padding: 0 20px;">
+          <p>Hello,</p>
+          <p>Your login verification code is: <strong style="font-size: 24px;">${otp}</strong></p>
+          <p>This code will expire in 10 minutes.</p>
+        </div>
+      </div>
+    `;
+
+    await resend.emails.send({
+      from: senderEmail,
+      to: email,
+      subject: "Your Pipeline Verification Code",
+      html: htmlContent,
+    });
+
+    return res.status(200).json({ message: "OTP sent successfully" });
+  } catch (error) {
+    console.error("Error sending OTP:", error);
+    return res.status(500).json({ error: "Failed to send OTP" });
+  }
+});
+
+app.post("/verify-otp", async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      return res.status(400).json({ error: "Email and OTP are required" });
+    }
+
+    const otpDocRef = firestore.collection("otps").doc(email.toLowerCase());
+    const snapshot = await otpDocRef.get();
+
+    if (!snapshot.exists) {
+      return res.status(400).json({ error: "No pending verification found or code is invalid." });
+    }
+
+    const data = snapshot.data();
+    if (data.otp !== otp) {
+      return res.status(400).json({ error: "Invalid verification code" });
+    }
+
+    if (data.expiresAt.toDate() < new Date()) {
+      await otpDocRef.delete();
+      return res.status(400).json({ error: "Verification code has expired. Please request a new one." });
+    }
+
+    // Valid OTP, delete it
+    await otpDocRef.delete();
+
+    return res.status(200).json({ message: "OTP verified successfully" });
+  } catch (error) {
+    console.error("Error verifying OTP:", error);
+    return res.status(500).json({ error: "Failed to verify OTP" });
+  }
+});
+
 // ----- FORGOT PASSWORD ROUTES -----
 app.post("/forgot-password", async (req, res) => {
   try {
@@ -863,8 +951,8 @@ app.post("/manual-override-coupons", async (req, res) => {
       const signupUrl = `${process.env.FRONTEND_URL}/signup`;
       const expirationText = redeemBy
         ? `This coupon expires on ${new Date(
-            redeemBy * 1000
-          ).toLocaleDateString()}.`
+          redeemBy * 1000
+        ).toLocaleDateString()}.`
         : "This coupon never expires.";
 
       const htmlContent = `
