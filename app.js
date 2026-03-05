@@ -1043,7 +1043,7 @@ app.get("/coupons/check-expiring", async (req, res) => {
     const coupons = await stripe.coupons.list({ limit: 100 });
     const now = Math.floor(Date.now() / 1000); // Current time in Unix seconds
     const oneDayInSeconds = 24 * 60 * 60;
-    const alertThresholds = [7]; // Days before expiry to alert
+    const alertThresholds = [30, 14, 7]; // Days before expiry to alert
     const alertsSent = [];
 
     for (const coupon of coupons.data) {
