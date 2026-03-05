@@ -24,6 +24,8 @@ const senderEmail = process.env.SENDER_EMAIL;
 const firebaseServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
 const jwtSecret = process.env.JWT_SECRET;
 const nodeEnv = process.env.NODE_ENV;
+const adminEmail = process.env.ADMIN_EMAIL;
+const cronSecret = process.env.CRON_SECRET;
 const subscriptionPriceId =
   nodeEnv === "production"
     ? process.env.SUBSCRIPTION_PRICE_ID
@@ -1023,6 +1025,111 @@ app.delete("/coupons/:couponId", async (req, res) => {
   } catch (error) {
     console.error("Error deleting coupon:", error);
     return res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/coupons/check-expiring", async (req, res) => {
+  try {
+    // Verify cron secret
+    const authHeader = req.headers.authorization;
+    if (!cronSecret || !authHeader || authHeader !== `Bearer ${cronSecret}`) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!adminEmail) {
+      return res.status(500).json({ error: "ADMIN_EMAIL is not configured" });
+    }
+
+    const coupons = await stripe.coupons.list({ limit: 100 });
+    const now = Math.floor(Date.now() / 1000); // Current time in Unix seconds
+    const oneDayInSeconds = 24 * 60 * 60;
+    const alertThresholds = [7]; // Days before expiry to alert
+    const alertsSent = [];
+
+    for (const coupon of coupons.data) {
+      // Skip coupons without an expiry date
+      if (!coupon.redeem_by) continue;
+
+      const secondsRemaining = coupon.redeem_by - now;
+      const daysRemaining = Math.round(secondsRemaining / oneDayInSeconds);
+
+      // Check if daysRemaining matches any threshold (±1 day tolerance for daily cron)
+      const matchedThreshold = alertThresholds.find(
+        (threshold) => Math.abs(daysRemaining - threshold) <= 1
+      );
+
+      if (matchedThreshold && daysRemaining > 0) {
+        const expiryDate = new Date(coupon.redeem_by * 1000).toLocaleDateString(
+          "en-US",
+          { year: "numeric", month: "long", day: "numeric" }
+        );
+        const couponTarget =
+          coupon.metadata?.allowed_domain ||
+          coupon.metadata?.allowed_email ||
+          "N/A";
+        const targetLabel = coupon.metadata?.allowed_domain
+          ? "Domain"
+          : "Email";
+
+        const htmlContent = `
+          <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+            <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+              <div style="text-align: center;">
+                <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 90px; width: auto;" />
+              </div>
+            </div>
+            <div style="padding: 0 20px;">
+              <h2 style="color: #d97706;">⚠️ Coupon Expiring Soon</h2>
+              <p>The following coupon will expire in <strong>${daysRemaining} day${daysRemaining !== 1 ? "s" : ""}</strong>:</p>
+              <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                <tr style="border-bottom: 1px solid #e5e7eb;">
+                  <td style="padding: 8px 0; font-weight: bold; color: #555;">Coupon Name</td>
+                  <td style="padding: 8px 0;">${coupon.name || coupon.id}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #e5e7eb;">
+                  <td style="padding: 8px 0; font-weight: bold; color: #555;">${targetLabel}</td>
+                  <td style="padding: 8px 0;">${couponTarget}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #e5e7eb;">
+                  <td style="padding: 8px 0; font-weight: bold; color: #555;">Discount</td>
+                  <td style="padding: 8px 0;">${coupon.percent_off}% off</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #e5e7eb;">
+                  <td style="padding: 8px 0; font-weight: bold; color: #555;">Expiry Date</td>
+                  <td style="padding: 8px 0;">${expiryDate}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #e5e7eb;">
+                  <td style="padding: 8px 0; font-weight: bold; color: #555;">Redemptions</td>
+                  <td style="padding: 8px 0;">${coupon.times_redeemed}${coupon.max_redemptions ? " / " + coupon.max_redemptions : ""}</td>
+                </tr>
+              </table>
+              <p style="font-size: 13px; color: #666;">This is an automated alert. Please take action if needed before the expiry date.</p>
+            </div>
+          </div>
+        `;
+
+        await resend.emails.send({
+          from: senderEmail,
+          to: adminEmail,
+          subject: `⚠️ Coupon "${coupon.name || coupon.id}" expires in ${daysRemaining} days`,
+          html: htmlContent,
+        });
+
+        alertsSent.push({
+          coupon: coupon.name || coupon.id,
+          daysRemaining,
+          expiryDate,
+        });
+      }
+    }
+
+    return res.status(200).json({
+      message: `Processed ${coupons.data.length} coupons, sent ${alertsSent.length} alert(s)`,
+      alerts: alertsSent,
+    });
+  } catch (error) {
+    console.error("Error checking expiring coupons:", error);
+    return res.status(500).json({ error: "Failed to check expiring coupons" });
   }
 });
 
