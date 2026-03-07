@@ -989,13 +989,28 @@ app.get("/subscription-status/:customerId", async (req, res) => {
     const { customerId } = req.params;
     console.log(customerId);
 
-    // Get all subscriptions for the customer
-    const subscriptions = await stripe.subscriptions.list({
+    // Try active/trialing subscriptions first, fallback to all
+    let subscriptions = await stripe.subscriptions.list({
       customer: customerId,
-      status: "all",
+      status: "active",
       limit: 1,
     });
-    console.log(subscriptions.data);
+
+    if (subscriptions.data.length === 0) {
+      subscriptions = await stripe.subscriptions.list({
+        customer: customerId,
+        status: "trialing",
+        limit: 1,
+      });
+    }
+
+    if (subscriptions.data.length === 0) {
+      subscriptions = await stripe.subscriptions.list({
+        customer: customerId,
+        status: "all",
+        limit: 1,
+      });
+    }
 
     if (subscriptions.data.length === 0) {
       return res.status(200).json({
@@ -1018,6 +1033,7 @@ app.get("/subscription-status/:customerId", async (req, res) => {
       trialEnd: subscription.trial_end || null, // Trial end timestamp
       planName: product.name || "Unknown Plan",
       subscriptionId: subscription.id,
+      seatCount: subscription.items.data[0]?.quantity || 1,
     });
   } catch (error) {
     console.error("Error fetching subscription status:", error);
@@ -1129,6 +1145,207 @@ app.post("/create-institution-checkout-session", async (req, res) => {
   } catch (error) {
     console.error("Error creating institution checkout session:", error);
     return res.status(500).json({ sessionUrl: null, error: error.message });
+  }
+});
+
+// ----- INSTITUTION INVITATION ROUTES -----
+
+// Get all invitations for an institution
+app.get("/institution/invitations/:institutionUserId", async (req, res) => {
+  try {
+    const { institutionUserId } = req.params;
+    const snapshot = await firestore
+      .collection("institution_invitations")
+      .where("institutionUserId", "==", institutionUserId)
+      .get();
+
+    const invitations = snapshot.docs
+      .map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }))
+      .sort((a, b) => {
+        const timeA = a.createdAt?._seconds || a.createdAt || 0;
+        const timeB = b.createdAt?._seconds || b.createdAt || 0;
+        return timeB - timeA;
+      });
+
+    return res.status(200).json({ invitations });
+  } catch (error) {
+    console.error("Error fetching invitations:", error);
+    return res.status(500).json({ error: "Failed to fetch invitations" });
+  }
+});
+
+// Invite a user
+app.post("/institution/invite-user", async (req, res) => {
+  try {
+    const { institutionUserId, invitedEmail, institutionEmail, institutionName } = req.body;
+
+    if (!institutionUserId || !invitedEmail || !institutionEmail) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Get institution user profile to find stripe customer ID
+    const usersRef = firestore.collection("users_profiles");
+    const userSnapshot = await usersRef
+      .where("id", "==", institutionUserId)
+      .limit(1)
+      .get();
+
+    if (userSnapshot.empty) {
+      return res.status(404).json({ error: "Institution user not found" });
+    }
+
+    const institutionProfile = userSnapshot.docs[0].data();
+    const customerId = institutionProfile.stripe_customer_id;
+
+    if (!customerId) {
+      return res.status(400).json({ error: "No Stripe customer found" });
+    }
+
+    // Get seat count from subscription
+    const subscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "active",
+      limit: 1,
+    });
+
+    if (subscriptions.data.length === 0) {
+      return res.status(400).json({ error: "No active subscription found" });
+    }
+
+    const seatCount = subscriptions.data[0].items.data[0]?.quantity || 1;
+
+    // Count existing invitations
+    const existingInvitations = await firestore
+      .collection("institution_invitations")
+      .where("institutionUserId", "==", institutionUserId)
+      .get();
+
+    if (existingInvitations.size >= seatCount) {
+      return res.status(400).json({
+        error: `All ${seatCount} seats are in use. Remove an invitation or upgrade your plan.`,
+      });
+    }
+
+    // Check if email is already invited
+    const alreadyInvited = existingInvitations.docs.some(
+      (doc) => doc.data().invitedEmail === invitedEmail.toLowerCase()
+    );
+
+    if (alreadyInvited) {
+      return res.status(400).json({ error: "This email has already been invited" });
+    }
+
+    // Create invitation
+    const docRef = await firestore.collection("institution_invitations").add({
+      institutionUserId,
+      institutionEmail: institutionEmail.toLowerCase(),
+      institutionName: institutionName || "",
+      invitedEmail: invitedEmail.toLowerCase(),
+      status: "pending",
+      createdAt: new Date(),
+    });
+
+    // Send invitation email
+    const institutionDisplayName = institutionName ? `${institutionName} (${institutionEmail.toLowerCase()})` : institutionEmail.toLowerCase();
+
+    try {
+      const resendResponse = await resend.emails.send({
+        from: `Pipeline <${process.env.SENDER_EMAIL}>`,
+        to: invitedEmail.toLowerCase(),
+        subject: `You've been invited to join Pipeline by ${institutionName || "your institution"}!`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333 text-align: center;">
+            <h2 style="color: #2563eb;">Pipeline Invitation</h2>
+            <p>Hello!</p>
+            <p>You have been invited by <strong>${institutionDisplayName}</strong> to join Pipeline. Your subscription is covered by your institution!</p>
+            <p>Please click the link below to sign up and join your institution's portal:</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${process.env.FRONTEND_URL}/signup" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">
+                Accept Invitation & Sign Up
+              </a>
+            </div>
+            <p style="color: #666; font-size: 14px;">If you already have a Pipeline account with this email address, simply log in.</p>
+          </div>
+        `,
+      });
+      console.log("Resend API response:", resendResponse);
+    } catch (emailError) {
+      console.error("Failed to send invitation email via Resend:", emailError);
+      // We don't return 500 here because the invitation was successfully created in the DB
+    }
+
+
+    return res.status(201).json({
+      message: "Invitation sent successfully",
+      invitation: {
+        id: docRef.id,
+        invitedEmail: invitedEmail.toLowerCase(),
+        status: "pending",
+      },
+    });
+  } catch (error) {
+    console.error("Error inviting user:", error);
+    return res.status(500).json({ error: "Failed to invite user" });
+  }
+});
+
+// Revoke an invitation
+app.post("/institution/revoke-invitation", async (req, res) => {
+  try {
+    const { invitationId } = req.body;
+
+    if (!invitationId) {
+      return res.status(400).json({ error: "Invitation ID is required" });
+    }
+
+    await firestore.collection("institution_invitations").doc(invitationId).delete();
+
+    return res.status(200).json({ message: "Invitation revoked successfully" });
+  } catch (error) {
+    console.error("Error revoking invitation:", error);
+    return res.status(500).json({ error: "Failed to revoke invitation" });
+  }
+});
+
+// Check if a user email has institution coverage
+app.get("/institution/check-coverage/:email", async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    const snapshot = await firestore
+      .collection("institution_invitations")
+      .where("invitedEmail", "==", email.toLowerCase())
+      .limit(10) // fetch a few just in case there are multiple, evaluate in memory
+      .get();
+
+    // Prefer accepted, otherwise look for pending
+    let targetDoc = snapshot.docs.find(doc => doc.data().status === "accepted");
+
+    // If no accepted one but there's a pending one, auto-accept it now since the user is explicitly checking coverage (meaning they are logged in)
+    if (!targetDoc) {
+      targetDoc = snapshot.docs.find(doc => doc.data().status === "pending");
+
+      if (targetDoc) {
+        // Auto-accept the invitation
+        await targetDoc.ref.update({ status: "accepted" });
+      }
+    }
+
+    if (!targetDoc) {
+      return res.status(200).json({ covered: false });
+    }
+
+    const invitation = targetDoc.data();
+    return res.status(200).json({
+      covered: true,
+      institutionName: invitation.institutionName,
+    });
+  } catch (error) {
+    console.error("Error checking coverage:", error);
+    return res.status(500).json({ error: "Failed to check coverage" });
   }
 });
 
