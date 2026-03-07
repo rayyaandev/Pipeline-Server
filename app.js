@@ -1085,6 +1085,53 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
+app.post("/create-institution-checkout-session", async (req, res) => {
+  try {
+    const { customerId, quantity } = req.body;
+
+    if (!customerId || !quantity || quantity < 1) {
+      return res.status(400).json({ error: "Customer ID and quantity (>= 1) are required" });
+    }
+
+    // Check for existing subscriptions
+    const existingSubscriptions = await stripe.subscriptions.list({
+      customer: customerId,
+      status: "all",
+      limit: 10,
+    });
+
+    const hasActiveSubscription = existingSubscriptions.data.some(
+      (sub) => sub.status === "active" || sub.status === "trialing"
+    );
+
+    if (hasActiveSubscription) {
+      return res.status(400).json({
+        error: "You already have an active subscription.",
+        sessionUrl: null,
+      });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "subscription",
+      line_items: [
+        {
+          price: "price_1T85NVFG6H6jDaislxpmNNBP",
+          quantity: parseInt(quantity),
+        },
+      ],
+      customer: customerId,
+      success_url: process.env.FRONTEND_URL + "/institution-portal",
+      cancel_url: process.env.FRONTEND_URL + "/institution-pricing?error=true",
+    });
+
+    return res.status(200).json({ sessionUrl: session.url });
+  } catch (error) {
+    console.error("Error creating institution checkout session:", error);
+    return res.status(500).json({ sessionUrl: null, error: error.message });
+  }
+});
+
 app.post("/cancel-subscription", async (req, res) => {
   try {
     const { subscriptionId } = req.body;
