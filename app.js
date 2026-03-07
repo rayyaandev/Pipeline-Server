@@ -199,7 +199,7 @@ app.post("/send-otp", async (req, res) => {
 
 app.post("/verify-otp", async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const { email, otp, purpose } = req.body;
     if (!email || !otp) {
       return res.status(400).json({ error: "Email and OTP are required" });
     }
@@ -223,6 +223,15 @@ app.post("/verify-otp", async (req, res) => {
 
     // Valid OTP, delete it
     await otpDocRef.delete();
+
+    // If this is for email verification after signup, mark the email as verified
+    if (purpose === "email-verification") {
+      const usersRef = firestore.collection("users_profiles");
+      const userSnapshot = await usersRef.where("email", "==", email.toLowerCase()).limit(1).get();
+      if (!userSnapshot.empty) {
+        await userSnapshot.docs[0].ref.update({ emailVerified: true });
+      }
+    }
 
     return res.status(200).json({ message: "OTP verified successfully" });
   } catch (error) {
@@ -350,7 +359,139 @@ app.post("/reset-password", async (req, res) => {
   }
 });
 
-// ----- RECOVERY EMAIL ROUTES -----
+// ----- RECOVERY EMAIL OTP ROUTES -----
+app.post("/send-recovery-otp", async (req, res) => {
+  try {
+    const { email, recoveryEmail } = req.body;
+
+    if (!email || !recoveryEmail) {
+      return res.status(400).json({ error: "Email and recovery email are required" });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(recoveryEmail)) {
+      return res.status(400).json({ error: "Invalid recovery email format" });
+    }
+
+    if (email.toLowerCase() === recoveryEmail.toLowerCase()) {
+      return res.status(400).json({ error: "Recovery email must be different from your primary email" });
+    }
+
+    // Check if this recovery email is already verified by another user
+    const usersRef = firestore.collection("users_profiles");
+    const existingSnapshot = await usersRef
+      .where("recoveryEmail", "==", recoveryEmail.toLowerCase())
+      .where("recoveryEmailVerified", "==", true)
+      .limit(1)
+      .get();
+
+    if (!existingSnapshot.empty) {
+      const existingUser = existingSnapshot.docs[0].data();
+      if (existingUser.email.toLowerCase() !== email.toLowerCase()) {
+        return res.status(400).json({ error: "This email is already registered as a recovery email for another account" });
+      }
+    }
+
+    // Verify the user exists in Firebase Auth
+    try {
+      await auth.getUserByEmail(email);
+    } catch (error) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Generate 6 digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Store OTP keyed by recovery email
+    const otpDocRef = firestore.collection("otps").doc(recoveryEmail.toLowerCase());
+    await otpDocRef.set({
+      otp,
+      expiresAt,
+      createdAt: new Date(),
+    });
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #ffffff; border-bottom: 2px solid #e5e7eb; margin-bottom: 30px;">
+          <div style="text-align: center;">
+            <img src="${process.env.FRONTEND_URL}/email-logo.png" alt="Pipeline Logo" style="height: 90px; width: auto;" />
+          </div>
+        </div>
+        <div style="padding: 0 20px;">
+          <p>Hello,</p>
+          <p>Your recovery email verification code is: <strong style="font-size: 24px;">${otp}</strong></p>
+          <p>This code will expire in 10 minutes.</p>
+        </div>
+      </div>
+    `;
+
+    await resend.emails.send({
+      from: senderEmail,
+      to: recoveryEmail,
+      subject: "Verify your recovery email for Pipeline",
+      html: htmlContent,
+    });
+
+    return res.status(200).json({ message: "OTP sent to recovery email successfully" });
+  } catch (error) {
+    console.error("Error sending recovery OTP:", error);
+    return res.status(500).json({ error: "Failed to send recovery OTP" });
+  }
+});
+
+app.post("/verify-recovery-otp", async (req, res) => {
+  try {
+    const { email, recoveryEmail, otp } = req.body;
+    if (!email || !recoveryEmail || !otp) {
+      return res.status(400).json({ error: "Email, recovery email, and OTP are required" });
+    }
+
+    const otpDocRef = firestore.collection("otps").doc(recoveryEmail.toLowerCase());
+    const snapshot = await otpDocRef.get();
+
+    if (!snapshot.exists) {
+      return res.status(400).json({ error: "No pending verification found or code is invalid." });
+    }
+
+    const data = snapshot.data();
+    if (data.otp !== otp) {
+      return res.status(400).json({ error: "Invalid verification code" });
+    }
+
+    if (data.expiresAt.toDate() < new Date()) {
+      await otpDocRef.delete();
+      return res.status(400).json({ error: "Verification code has expired. Please request a new one." });
+    }
+
+    // Valid OTP, delete it
+    await otpDocRef.delete();
+
+    // Update user profile with recovery email
+    const usersRef = firestore.collection("users_profiles");
+    const userSnapshot = await usersRef.where("email", "==", email.toLowerCase()).limit(1).get();
+
+    if (userSnapshot.empty) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    await userSnapshot.docs[0].ref.update({
+      recoveryEmail: recoveryEmail.toLowerCase(),
+      recoveryEmailVerified: true,
+      recoveryEmailVerifiedAt: new Date(),
+    });
+
+    return res.status(200).json({
+      message: "Recovery email verified successfully",
+      recoveryEmail: recoveryEmail.toLowerCase(),
+    });
+  } catch (error) {
+    console.error("Error verifying recovery OTP:", error);
+    return res.status(500).json({ error: "Failed to verify recovery OTP" });
+  }
+});
+
+// ----- RECOVERY EMAIL LINK ROUTES (legacy) -----
 app.post("/send-recovery-email-verification", async (req, res) => {
   try {
     const { email, recoveryEmail } = req.body;
