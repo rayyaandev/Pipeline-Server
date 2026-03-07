@@ -864,6 +864,85 @@ app.post("/complete-account-recovery", async (req, res) => {
   }
 });
 
+// ----- INSTITUTION USER ROUTES -----
+app.post("/admin/create-institution-user", async (req, res) => {
+  try {
+    const { email, password, fullname, institutionName, institutionDomain } = req.body;
+
+    if (!email || !password || !fullname || !institutionName || !institutionDomain) {
+      return res.status(400).json({ error: "All fields are required: email, password, fullname, institutionName, institutionDomain" });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    // Create Firebase Auth user
+    let firebaseUser;
+    try {
+      firebaseUser = await auth.createUser({
+        email: email.toLowerCase(),
+        password,
+        displayName: fullname,
+      });
+    } catch (error) {
+      if (error.code === "auth/email-already-exists") {
+        return res.status(400).json({ error: "Email already in use" });
+      }
+      throw error;
+    }
+
+    // Create Stripe customer
+    let stripeCustomer;
+    try {
+      stripeCustomer = await stripe.customers.create({
+        email: email.toLowerCase(),
+        metadata: { user_auth_id: firebaseUser.uid },
+      });
+    } catch (error) {
+      // Rollback: delete Firebase user
+      await auth.deleteUser(firebaseUser.uid);
+      throw error;
+    }
+
+    // Create Firestore user profile
+    try {
+      await firestore.collection("users_profiles").add({
+        id: firebaseUser.uid,
+        fullname,
+        email: email.toLowerCase(),
+        stripe_customer_id: stripeCustomer.id,
+        role: "user",
+        accountType: "institution",
+        emailVerified: true,
+        recoveryEmailVerified: true,
+        institutionName,
+        institutionDomain: institutionDomain.toLowerCase(),
+        createdAt: new Date(),
+      });
+    } catch (error) {
+      // Rollback: delete Stripe customer and Firebase user
+      await stripe.customers.del(stripeCustomer.id);
+      await auth.deleteUser(firebaseUser.uid);
+      throw error;
+    }
+
+    return res.status(201).json({
+      message: "Institution user created successfully",
+      user: {
+        uid: firebaseUser.uid,
+        email: email.toLowerCase(),
+        fullname,
+        institutionName,
+        institutionDomain: institutionDomain.toLowerCase(),
+      },
+    });
+  } catch (error) {
+    console.error("Error creating institution user:", error);
+    return res.status(500).json({ error: "Failed to create institution user" });
+  }
+});
+
 app.post("/delete-user", async (req, res) => {
   const { userUid } = req.body;
 
