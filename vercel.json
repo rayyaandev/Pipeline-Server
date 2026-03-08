@@ -1,0 +1,8 @@
+{
+    "crons": [
+        {
+            "path": "/coupons/check-expiring",
+            "schedule": "0 0 * * *"
+        }
+    ]
+}
