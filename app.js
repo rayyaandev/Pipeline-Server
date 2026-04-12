@@ -1085,6 +1085,23 @@ app.post("/create-checkout-session", async (req, res) => {
       cancel_url: process.env.FRONTEND_URL + "/pricing?error=true",
     };
 
+    if (discount && discount.percent_off === 100 && discount.duration === "forever") {
+      try {
+        const subscription = await stripe.subscriptions.create({
+          customer: customerId,
+          items: [{ price: subscriptionPriceId }],
+          discounts: [{ coupon: discount.id }],
+        });
+
+        if (subscription.status === "active" || subscription.status === "trialing") {
+          return res.status(200).json({ bypassedCheckout: true, subscriptionId: subscription.id });
+        }
+      } catch (subError) {
+        console.error("Failed to directly create subscription for 100% off coupon:", subError);
+        // Fallback to normal checkout session
+      }
+    }
+
     if (discount) {
       checkoutParams.discounts = [
         {
