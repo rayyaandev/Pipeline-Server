@@ -864,10 +864,56 @@ app.post("/complete-account-recovery", async (req, res) => {
   }
 });
 
+// ----- OFFERED PRICES HELPER -----
+// Finds an existing offered_price doc with matching price_per_seat, or creates a new Stripe price
+// and a new Firestore doc. Either way, appends `uid` to `offered_to`.
+async function getOrCreateOfferedPrice(pricePerSeat, uid) {
+  const offeredPricesRef = firestore.collection("offered_prices");
+
+  // Look for an existing doc with the same price
+  const existing = await offeredPricesRef
+    .where("price_per_seat", "==", pricePerSeat)
+    .limit(1)
+    .get();
+
+  if (!existing.empty) {
+    // Reuse the existing Stripe price and append the new uid
+    const docRef = existing.docs[0].ref;
+    const data = existing.docs[0].data();
+    await docRef.update({
+      offered_to: [...(data.offered_to || []), uid],
+    });
+    return data.stripe_price_id;
+  }
+
+  // No existing price — create a new Stripe price.
+  // Attach it to the same product as the default institution price.
+  const defaultPrice = await stripe.prices.retrieve("price_1T85NVFG6H6jDaislxpmNNBP");
+  const productId = defaultPrice.product;
+
+  const newStripePrice = await stripe.prices.create({
+    unit_amount: Math.round(pricePerSeat * 100), // convert dollars to cents
+    currency: "usd",
+    recurring: { interval: "month" },
+    product: productId,
+    metadata: { created_by: "dynamic_pricing" },
+  });
+
+  // Save to Firestore
+  await offeredPricesRef.add({
+    stripe_price_id: newStripePrice.id,
+    price_per_seat: pricePerSeat,
+    offered_to: [uid],
+    createdAt: new Date(),
+  });
+
+  return newStripePrice.id;
+}
+
 // ----- INSTITUTION USER ROUTES -----
 app.post("/admin/create-institution-user", async (req, res) => {
   try {
-    const { email, password, fullname, institutionName, institutionDomain } = req.body;
+    const { email, password, fullname, institutionName, institutionDomain, pricePerSeat } = req.body;
 
     if (!email || !password || !fullname || !institutionName || !institutionDomain) {
       return res.status(400).json({ error: "All fields are required: email, password, fullname, institutionName, institutionDomain" });
@@ -875,6 +921,12 @@ app.post("/admin/create-institution-user", async (req, res) => {
 
     if (password.length < 6) {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
+    }
+
+    // Validate pricePerSeat if provided
+    const resolvedPrice = pricePerSeat != null ? Number(pricePerSeat) : null;
+    if (resolvedPrice !== null && (isNaN(resolvedPrice) || resolvedPrice <= 0)) {
+      return res.status(400).json({ error: "pricePerSeat must be a positive number" });
     }
 
     // Create Firebase Auth user
@@ -927,6 +979,17 @@ app.post("/admin/create-institution-user", async (req, res) => {
       throw error;
     }
 
+    // Handle offered price — create or reuse a Stripe price and track it
+    let offeredStripePriceId = null;
+    if (resolvedPrice !== null) {
+      try {
+        offeredStripePriceId = await getOrCreateOfferedPrice(resolvedPrice, firebaseUser.uid);
+      } catch (priceError) {
+        // Non-fatal: user is created, just log the pricing error
+        console.error("Failed to set offered price:", priceError);
+      }
+    }
+
     return res.status(201).json({
       message: "Institution user created successfully",
       user: {
@@ -935,6 +998,7 @@ app.post("/admin/create-institution-user", async (req, res) => {
         fullname,
         institutionName,
         institutionDomain: institutionDomain.toLowerCase(),
+        offeredStripePriceId,
       },
     });
   } catch (error) {
@@ -1118,13 +1182,49 @@ app.post("/create-checkout-session", async (req, res) => {
   }
 });
 
+// GET endpoint: look up the offered price for an institution user by their Firebase UID
+app.get("/institution/offered-price/:uid", async (req, res) => {
+  try {
+    const { uid } = req.params;
+
+    const snapshot = await firestore
+      .collection("offered_prices")
+      .where("offered_to", "array-contains", uid)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      // Fall back to creating a default $2.50 price specifically for them
+      const stripePriceId = await getOrCreateOfferedPrice(2.5, uid);
+      return res.status(200).json({
+        stripe_price_id: stripePriceId,
+        price_per_seat: 2.5,
+        isDefault: false,
+      });
+    }
+
+    const data = snapshot.docs[0].data();
+    return res.status(200).json({
+      stripe_price_id: data.stripe_price_id,
+      price_per_seat: data.price_per_seat,
+      isDefault: false,
+    });
+  } catch (error) {
+    console.error("Error fetching offered price:", error);
+    return res.status(500).json({ error: "Failed to fetch offered price" });
+  }
+});
+
 app.post("/create-institution-checkout-session", async (req, res) => {
   try {
-    const { customerId, quantity } = req.body;
+    const { customerId, quantity, priceId } = req.body;
 
     if (!customerId || !quantity || quantity < 1) {
       return res.status(400).json({ error: "Customer ID and quantity (>= 1) are required" });
     }
+
+    // Use the provided custom price or fall back to the default institution price
+    const resolvedPriceId = priceId || "price_1T85NVFG6H6jDaislxpmNNBP";
 
     // Check for existing subscriptions
     const existingSubscriptions = await stripe.subscriptions.list({
@@ -1149,7 +1249,7 @@ app.post("/create-institution-checkout-session", async (req, res) => {
       mode: "subscription",
       line_items: [
         {
-          price: "price_1T85NVFG6H6jDaislxpmNNBP",
+          price: resolvedPriceId,
           quantity: parseInt(quantity),
         },
       ],
