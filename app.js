@@ -657,6 +657,34 @@ app.post("/check-recovery-email", async (req, res) => {
   }
 });
 
+app.post("/check-email-availability", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
+
+    const usersRef = firestore.collection("users_profiles");
+    const snapshot = await usersRef
+      .where("recoveryEmail", "==", email.toLowerCase())
+      .where("recoveryEmailVerified", "==", true)
+      .limit(1)
+      .get();
+
+    if (!snapshot.empty) {
+      return res.status(200).json({
+        available: false,
+        reason: "This email is already registered as a recovery email for another account."
+      });
+    }
+
+    return res.status(200).json({ available: true });
+  } catch (error) {
+    console.error("Error checking email availability:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ----- ACCOUNT RECOVERY ROUTES -----
 app.post("/initiate-account-recovery", async (req, res) => {
   try {
