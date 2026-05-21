@@ -342,7 +342,7 @@ router.post("/discounts", async (req, res) => {
 });
 
 // -------- HELPER FUNCTION -----------
-function getDiscount(coupons, email, domain) {
+export function getDiscount(coupons, email, domain) {
   const currentTime = Math.floor(Date.now() / 1000); // Current Unix timestamp in seconds
 
   // Helper function to check if coupon is valid (not expired and not fully redeemed)
