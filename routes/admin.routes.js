@@ -1,6 +1,7 @@
 import express from "express";
 import jwt from "jsonwebtoken";
 import { auth, firestore, stripe, resend, jwtSecret, senderEmail, subscriptionPriceId } from "../config.js";
+import { getOrCreateOfferedPrice } from "./institution.routes.js";
 
 const router = express.Router();
 
@@ -107,6 +108,10 @@ router.post("/delete-user", async (req, res) => {
   try {
     await auth.deleteUser(userUid);
   } catch (error) {
+    if (error.code === "auth/user-not-found") {
+      console.log(`Firebase user ${userUid} not found, proceeding anyway.`);
+      return res.status(200).json({ message: "Firebase user not found, but proceeding with deletion" });
+    }
     console.error("Error deleting user:", error);
     return res.status(500).json({ error: "Failed to delete user" });
   }

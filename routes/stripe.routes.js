@@ -2,6 +2,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import { auth, firestore, stripe, resend, jwtSecret, senderEmail, subscriptionPriceId } from "../config.js";
 import { getDiscount } from "./coupon.routes.js";
+import { getOrCreateOfferedPrice } from "./institution.routes.js";
 
 const router = express.Router();
 
@@ -27,6 +28,10 @@ router.post("/delete-stripe-customer", async (req, res) => {
       .status(200)
       .json({ message: "Stripe customer deleted successfully" });
   } catch (error) {
+    if (error.statusCode === 404) {
+      console.log(`Stripe customer ${customerId} not found, proceeding anyway.`);
+      return res.status(200).json({ message: "Stripe customer not found, but proceeding with deletion" });
+    }
     console.error("Error deleting stripe customer:", error);
     return res.status(500).json({ error: "Failed to delete stripe customer" });
   }

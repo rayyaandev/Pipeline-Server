@@ -7,7 +7,7 @@ const router = express.Router();
 // ----- OFFERED PRICES HELPER -----
 // Finds an existing offered_price doc with matching price_per_seat, or creates a new Stripe price
 // and a new Firestore doc. Either way, appends `uid` to `offered_to`.
-async function getOrCreateOfferedPrice(pricePerSeat, uid) {
+export async function getOrCreateOfferedPrice(pricePerSeat, uid) {
   const offeredPricesRef = firestore.collection("offered_prices");
 
   // Look for an existing doc with the same price
