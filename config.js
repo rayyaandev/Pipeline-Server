@@ -47,7 +47,9 @@ if (!jwtSecret) {
 }
 
 export const resend = new Resend(resendApiKey);
-export const stripe = new Stripe(stripeSecretKey);
+export const stripe = new Stripe(stripeSecretKey, {
+  timeout: 30000, // 30 second timeout to prevent hanging on stale connections
+});
 const firebaseApp = initializeApp({
   credential: cert(JSON.parse(firebaseServiceAccount)),
 });

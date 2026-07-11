@@ -39,9 +39,18 @@ router.post("/delete-stripe-customer", async (req, res) => {
 
 // ----- SUBSCRIPTION ROUTES -----
 router.get("/subscription-status/:customerId", async (req, res) => {
+  // Set a response timeout so the request doesn't hang indefinitely
+  const TIMEOUT_MS = 45000; // 45 seconds
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) {
+      console.error(`Subscription status request timed out for customer: ${req.params.customerId}`);
+      res.status(504).json({ error: "Request timed out" });
+    }
+  }, TIMEOUT_MS);
+
   try {
     const { customerId } = req.params;
-    console.log(customerId);
+    console.log("Fetching subscription status for:", customerId);
 
     // Try active/trialing subscriptions first, fallback to all
     let subscriptions = await stripe.subscriptions.list({
@@ -67,6 +76,7 @@ router.get("/subscription-status/:customerId", async (req, res) => {
     }
 
     if (subscriptions.data.length === 0) {
+      clearTimeout(timeout);
       return res.status(200).json({
         hasSubscription: false,
         status: null,
@@ -80,6 +90,7 @@ router.get("/subscription-status/:customerId", async (req, res) => {
     const price = await stripe.prices.retrieve(priceId);
     const product = await stripe.products.retrieve(price.product);
 
+    clearTimeout(timeout);
     return res.status(200).json({
       hasSubscription: true,
       status: subscription.status,
@@ -90,10 +101,13 @@ router.get("/subscription-status/:customerId", async (req, res) => {
       seatCount: subscription.items.data[0]?.quantity || 1,
     });
   } catch (error) {
+    clearTimeout(timeout);
     console.error("Error fetching subscription status:", error);
-    return res
-      .status(500)
-      .json({ error: "Failed to fetch subscription status" });
+    if (!res.headersSent) {
+      return res
+        .status(500)
+        .json({ error: "Failed to fetch subscription status" });
+    }
   }
 });
 
