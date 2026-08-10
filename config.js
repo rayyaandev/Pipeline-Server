@@ -24,7 +24,7 @@ export const cronSecret = process.env.CRON_SECRET;
 export const subscriptionPriceId =
   nodeEnv === "production"
     ? process.env.SUBSCRIPTION_PRICE_ID
-    : "price_1SVczaFG6H6jDaisbaA2rmbz";
+    : "price_1U2XKcFG6H6jDaismLgSYBq2";
 
 if (!subscriptionPriceId) {
   throw new Error("Please define SUBSCRIPTION_PRICE_ID in .env");
